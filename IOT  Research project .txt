@@ -1,0 +1,103 @@
+var pubnub = require('pubnub');
+var bleno = require('bleno');
+var five = require('johnny-five');
+var internet = require('internet-available');
+var pm2 = require('pm2');
+var pninterval;
+const pn = new pubnub({
+ publish_key: 'pub-c-7bc573ca-a768-407f-b8d2-df39e5694b87',
+ subscribe_key: 'sub-c-9df4c8f4-6bfa-11e8-967c-82814fd59ac3'
+});
+var voltage = 0;
+// Johnny-Five
+// Using a temperature sensor, type DS18B20
+five.Board().on('ready', function () {
+ var sensor = new five.Sensor({
+ pin: "A0",
+ });
+ // Scale the sensor's data from 0-1023 to 0-10 and log changes
+ sensor.on("change", function () {
+ let valuevolts = (5 / 1023) * this.value
+ voltage = valuevolts.toFixed(4);
+ console.log(voltage);
+ });
+ internet().then(function () {
+ pninterval = setInterval(publish, 25)
+ }).catch(function () {
+ console.log('internet not available');
+ })
+});
+const publish = () => {
+ let message = {
+ 'voltage': voltage
+ };
+ pn.publish({
+33
+ channel: 'temp_thermo_iot',
+ message: message,
+ }, (status, response) => {
+ if (status.error) {
+ console.log(status)
+ clearInterval(pninterval);
+ pm2.restart('bluetooth', (err, proc) =>{
+ if(err){
+ console.log(err)
+ }
+ } );
+ } else {
+ // console.log(response.timetoken)
+ }
+ });
+}
+// bluetooth initialization
+var settings = {
+ service_id: '32cd',
+ characteristic_id: '33cd'
+};
+bleno.on('stateChange', (state) => {
+ if (state === 'poweredOn') {
+ bleno.startAdvertising('raspberrypi_IoT', ['32cd']);
+ } else {
+ bleno.stopAdvertising();
+ }
+});
+bleno.on('advertisingStart', (error) => {
+ if (error) {
+ console.log(error)
+ } else {
+ console.log ('started..');
+ var interval;
+ bleno.setServices([
+ new bleno.PrimaryService({
+ uuid: settings.service_id,
+ characteristics: [
+ new bleno.Characteristic({
+ value: null,
+ uuid: settings.characteristic_id,
+ properties: ['read', 'write', 'notify'],
+ onReadRequest: function (offset, callback) {
+ var result = this.RESULT_SUCCESS;
+ let tempvalue = Buffer.allocUnsafe(4);
+34
+ tempvalue.writeFloatLE(voltage);
+ callback(result, tempvalue)
+ },
+ onSubscribe: function (maxValuesize, updateValueCallback) {
+ interval = setInterval(function () {
+ let tempvalue = Buffer.allocUnsafe(4);
+ tempvalue.writeFloatLE(voltage);
+ updateValueCallback(tempvalue)
+ }, 25)
+ },
+ onUnSubscribe: function () {
+ if (interval) {
+ clearInterval(interval);
+ interval = null;
+ }
+ }
+ })
+ ]
+ })
+ ]);
+ }
+});
